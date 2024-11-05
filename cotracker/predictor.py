@@ -59,7 +59,8 @@ class CoTrackerPredictor(torch.nn.Module):
                 queries,
                 segm_mask,
                 grid_size,
-                add_support_grid=(grid_size == 0 or segm_mask is not None),
+                # add_support_grid=(grid_size == 0 or segm_mask is not None),
+                add_support_grid=True,
                 grid_query_frame=grid_query_frame,
                 backward_tracking=backward_tracking,
             )

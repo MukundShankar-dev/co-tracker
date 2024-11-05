@@ -29,13 +29,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mask_path",
-        default="./assets/apple_mask.png",
+        # default="./assets/apple_mask.png",
+        default=None,
         help="path to a segmentation mask",
     )
     parser.add_argument(
         "--checkpoint",
-        # default="./checkpoints/cotracker.pth",
-        default=None,
+        default="./checkpoints/scaled_offline.pth",
+        # default=None,
         help="CoTracker model parameters",
     )
     parser.add_argument("--grid_size", type=int, default=10, help="Regular grid size")
@@ -66,8 +67,9 @@ if __name__ == "__main__":
     # load the input video frame by frame
     video = read_video_from_path(args.video_path)
     video = torch.from_numpy(video).permute(0, 3, 1, 2)[None].float()
-    segm_mask = np.array(Image.open(os.path.join(args.mask_path)))
-    segm_mask = torch.from_numpy(segm_mask)[None, None]
+    # segm_mask = np.array(Image.open(os.path.join(args.mask_path)))
+    # segm_mask = torch.from_numpy(segm_mask)[None, None]
+    segm_mask = None
 
     if args.checkpoint is not None:
         if args.use_v2_model:
@@ -104,6 +106,6 @@ if __name__ == "__main__":
     vis.visualize(
         video,
         pred_tracks,
-        pred_visibility,
+        # pred_visibility,
         query_frame=0 if args.backward_tracking else args.grid_query_frame,
     )
