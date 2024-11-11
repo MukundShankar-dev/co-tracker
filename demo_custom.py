@@ -2,16 +2,23 @@ import os
 import torch
 import argparse
 import numpy as np
+import imageio.v3 as iio
 
 from PIL import Image
 from cotracker.utils.visualizer import Visualizer, read_video_from_path
 from cotracker.predictor import CoTrackerPredictor
+from cotracker.predictor import CoTrackerOnlinePredictor
 
 if __name__ == '__main__':
+
+    DEFAULT_DEVICE = (
+        "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    )
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--video_path",
-        default="yt_samples/switch_leap.mp4",
+        default="yt_samples/adelle_speck.mp4",
         help="path to a video"
     )
     parser.add_argument(
@@ -19,43 +26,61 @@ if __name__ == '__main__':
         default=None,
         help="path to a segmentation mask"
     )
+
     parser.add_argument(
-        "--checkpoint",
-        default="./checkpoints/scaled_offline.pth",
-        # default=None,
-        help="CoTracker model parameters",
+        "--online",
+        action="store_true",
     )
+
+    parser.add_argument(
+        "--grid_size",
+        default=10
+    )
+
+    # parser.add_argument(
+    #     "--checkpoint",
+    #     default="./checkpoints/scaled_online.pth",
+    #     help="CoTracker model parameters",
+    # )
     args = parser.parse_args()
+
+    checkpoint = "./checkpoints/scaled_offline.pth"
+    if args.online:
+        checkpoint = "./checkpoints/scaled_online.pth"
+
 
     video = read_video_from_path(args.video_path)
     video = torch.from_numpy(video).permute(0, 3, 1, 2)[None].float()
     segm_mask = None
 
-    model = CoTrackerPredictor(
-        checkpoint=args.checkpoint,
-        v2=False,
-        offline=True,
-        window_len=60
-    )
+    if args.online == False:
+        model = CoTrackerPredictor(
+            checkpoint=checkpoint,
+            v2=False,
+            offline=True,
+            window_len=60
+        )
+    else:
+        model = CoTrackerOnlinePredictor(
+            checkpoint=checkpoint
+        )
+
     model = model.to("cuda")
     video = video.to("cuda")
 
-    # [(200, 280), (241, 268), (177, 192), (214, 183), (182, 121),
-    #  (208, 117), (181, 65), (208, 64), (210, 348), (257, 341)]
-    
     # adelle_speck.mp4
-    # queries = torch.tensor([
-    #     [0., 200., 280.],
-    #     [0., 241., 268.],
-    #     [0., 177., 192.],
-    #     [0., 214., 183.],
-    #     [0., 182., 121.],
-    #     [0., 208., 117.],
-    #     [0., 181., 65.],
-    #     [0., 208., 64.],
-    #     [0., 210., 348.],
-    #     [0., 257., 341.]
-    # ])
+    queries = torch.tensor([
+        [0., 200., 280.],
+        [0., 241., 268.],
+        [0., 177., 192.],
+        [0., 214., 183.],
+        [0., 182., 121.],
+        [0., 208., 117.],
+        [0., 181., 65.],
+        [0., 208., 64.],
+        [0., 210., 348.],
+        [0., 257., 341.]
+    ])
     # kaliya_lincoln.mp4
     # queries = torch.tensor([
     #     [0., 177., 185.],
@@ -98,26 +123,81 @@ if __name__ == '__main__':
     #     [0., 122., 392.],
     #     [0., 135., 364.]
     # ])
+
     # switch_leap.mp4
-    queries = torch.tensor([
-        [0., 271., 275.],
-        [0., 354., 227.],
-        [0., 271., 452.],
-        [0., 198., 554.],
-        [0., 279., 592.],
-        [0., 215., 285.]
-    ])
+    # queries = torch.tensor([
+    #     [0., 271., 275.],
+    #     [0., 354., 227.],
+    #     [0., 271., 452.],
+    #     [0., 198., 554.],
+    #     [0., 279., 592.],
+    #     [0., 215., 285.]
+    # ])
+
     queries = queries.cuda()
 
-    pred_tracks, pred_visibility = model(
-        video,
-        queries=queries[None]
-    )
+    def _process_step(window_frames, is_first_step, grid_size, grid_query_frame):
+                video_chunk = (
+                    torch.tensor(
+                        np.stack(window_frames[-model.step * 2 :]), device=DEFAULT_DEVICE
+                    )
+                    .float()
+                    .permute(0, 3, 1, 2)[None]
+                )  # (1, T, 3, H, W)
+                return model(
+                    video_chunk,
+                    is_first_step=is_first_step,
+                    queries=queries,
+                    grid_size=grid_size,
+                    grid_query_frame=grid_query_frame,
+                )
 
-    vis = Visualizer(save_dir="./saved_videos", pad_value=120, linewidth=3)
-    vis.visualize(
-        video,
-        pred_tracks,
-        # pred_visibility,
-        query_frame=0
-    )
+    if args.online == False:
+        pred_tracks, pred_visibility = model(
+            video,
+            queries=queries[None]
+        )
+
+        vis = Visualizer(save_dir="./saved_videos", pad_value=120, linewidth=3)
+        vis.visualize(
+            video,
+            pred_tracks,
+            query_frame=0
+        )
+    
+    else:        
+        queries = queries.unsqueeze(0)  # Adds a dimension, making shape (1, 6, 3)
+        is_first_step = True
+        window_frames = []
+
+        for i, frame in enumerate(
+            iio.imiter(
+                args.video_path,
+                plugin="FFMPEG",
+            )
+        ):
+            if i % model.step == 0 and i != 0:
+                pred_tracks, pred_visibility = _process_step(
+                    window_frames,
+                    is_first_step,
+                    grid_size=args.grid_size,
+                    grid_query_frame=0,
+                )
+                is_first_step = False
+            window_frames.append(frame)
+
+        pred_tracks, pred_visibility = _process_step(
+            window_frames[-(i % model.step) - model.step - 1 :],
+            is_first_step,
+            grid_size=args.grid_size,
+            grid_query_frame=0,
+        )
+
+        seq_name = args.video_path.split("/")[-1]
+        video = torch.tensor(np.stack(window_frames), device=DEFAULT_DEVICE).permute(
+            0, 3, 1, 2
+        )[None]
+        vis = Visualizer(save_dir="./saved_videos", pad_value=120, linewidth=3)
+        vis.visualize(
+            video, pred_tracks, query_frame=0
+        )
