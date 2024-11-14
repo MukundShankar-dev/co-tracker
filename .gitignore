@@ -1,5 +1,7 @@
 saved_videos/
-yt_samples/
+yt_samples*
 checkpoints
-saved_videos_offline/
-saved_videos_online/
+# saved_videos_offline/
+# saved_videos_online/
+saved_videos*
+model_comparisons*
